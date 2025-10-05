@@ -212,7 +212,10 @@ func handlerAddFeed(s *state,cmd command) error{
 		return err
 	}
 	fmt.Printf("%v",newFeed)
-	err = handlerFollow(s,cmd)
+	newCmd := cmd
+	newCmd.args = cmd.args[1:]
+
+	err = handlerFollow(s,newCmd)
 	if err != nil{
 		return fmt.Errorf("error crating follow feeds record: %v",err)
 	}
@@ -256,7 +259,7 @@ func handlerFollow(s *state, cmd command) error{
 	}
 	db := s.db
 	feedToFollow, err := db.GetFeed(context.Background(),feedUrl)
-	if err != nil{
+	if err != nil && err != sql.ErrNoRows{
 		return err
 	}
 	feedFollowParams := database.CreateFeedFollowParams{
@@ -297,7 +300,7 @@ func handlerFollowing(s *state, cmd command) error{
 		Valid: true,
 	}
 	feedFollows, err:= db.GetFeedFollowsForUser(context.Background(),getFollowsForUserParams)
-	if err != nil{
+	if err != nil && err != sql.ErrNoRows{
 		return err
 	}
 	fmt.Printf("%s is following:\n\n",currentUser.Name.String)
@@ -307,6 +310,8 @@ func handlerFollowing(s *state, cmd command) error{
 	return nil
 
 }
+
+
 
 func main(){
 	
