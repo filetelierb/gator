@@ -19,6 +19,7 @@ import (
 
 
 type Config = config.Config
+type User = database.User
 
 type state struct{
 	db *database.Queries
@@ -174,21 +175,14 @@ func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error){
 
 }
 
-func handlerAddFeed(s *state,cmd command) error{
+func handlerAddFeed(s *state,cmd command,u User) error{
 	args := cmd.args
 	if len(args) < 1{
 		return fmt.Errorf("name and url arguments are missing")
 	} else if len(args) < 2{
 		return fmt.Errorf("url argument is missing")
 	}
-	currentUserName := sql.NullString{
-		String: s.conf.CurrentUserName,
-		Valid: true,
-	}
-	currentUser, err := s.db.GetUser(context.Background(),currentUserName)
-	if err != nil{
-		return err
-	}
+	
 	
 	feedRecord := database.CreateFeedParams{
 		ID: uuid.New(),
@@ -203,7 +197,7 @@ func handlerAddFeed(s *state,cmd command) error{
 			Valid: true,
 		},
 		UserID: uuid.NullUUID{
-			UUID: currentUser.ID,
+			UUID: u.ID,
 			Valid: true,
 		},
 	}
@@ -215,7 +209,7 @@ func handlerAddFeed(s *state,cmd command) error{
 	newCmd := cmd
 	newCmd.args = cmd.args[1:]
 
-	err = handlerFollow(s,newCmd)
+	err = handlerFollow(s,newCmd,u)
 	if err != nil{
 		return fmt.Errorf("error crating follow feeds record: %v",err)
 	}
@@ -239,18 +233,10 @@ func handlerGetFeeds(s *state, cmd command) error{
 	}
 	return nil
 }
-func handlerFollow(s *state, cmd command) error{
+func handlerFollow(s *state, cmd command,u User) error{
 	args := cmd.args
 	if len(args) < 1{
 		return fmt.Errorf("no url was received")
-	}
-	currentUserName := sql.NullString{
-		String: s.conf.CurrentUserName,
-		Valid: true,
-	}
-	currentUser, err := s.db.GetUser(context.Background(),currentUserName)
-	if err != nil{
-		return err
 	}
 	
 	feedUrl := sql.NullString{
@@ -267,7 +253,7 @@ func handlerFollow(s *state, cmd command) error{
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		UserID: uuid.NullUUID{
-			UUID: currentUser.ID,
+			UUID: u.ID,
 			Valid: true,
 		},
 		FeedID: uuid.NullUUID{
@@ -284,31 +270,37 @@ func handlerFollow(s *state, cmd command) error{
 	
 }
 
-func handlerFollowing(s *state, cmd command) error{
-	currentUserName := sql.NullString{
-		String: s.conf.CurrentUserName,
-		Valid: true,
-	}
+func handlerFollowing(s *state, cmd command, u User) error{
+	
 	db := s.db
-	currentUser, err := db.GetUser(context.Background(),currentUserName)
-	if err != nil{
-		return err
-	}
-
 	getFollowsForUserParams := uuid.NullUUID{
-		UUID: currentUser.ID,
+		UUID: u.ID,
 		Valid: true,
 	}
 	feedFollows, err:= db.GetFeedFollowsForUser(context.Background(),getFollowsForUserParams)
 	if err != nil && err != sql.ErrNoRows{
 		return err
 	}
-	fmt.Printf("%s is following:\n\n",currentUser.Name.String)
+	fmt.Printf("%s is following:\n\n",u.Name.String)
 	for _,follow := range feedFollows{
 		fmt.Printf("- %s\n",follow.Name.String)
 	}
 	return nil
 
+}
+
+func middlewareLoggedIn(handler func(s *state, cmd command, u User) error) func(*state, command) error {
+    return func(s *state, cmd command) error {
+        currentUserName := sql.NullString{
+            String: s.conf.CurrentUserName,
+            Valid:  true,
+        }
+        currentUser, err := s.db.GetUser(context.Background(), currentUserName)
+        if err != nil {
+            return err
+        }
+        return handler(s, cmd, currentUser)
+    }
 }
 
 
@@ -338,10 +330,10 @@ func main(){
 	commands.register("reset",handlerReset)
 	commands.register("users",handlerGetUsers)
 	commands.register("agg",handlerAgg)
-	commands.register("addfeed",handlerAddFeed)
+	commands.register("addfeed",middlewareLoggedIn(handlerAddFeed))
 	commands.register("feeds", handlerGetFeeds)
-	commands.register("follow", handlerFollow)
-	commands.register("following",handlerFollowing)
+	commands.register("follow", middlewareLoggedIn(handlerFollow))
+	commands.register("following",middlewareLoggedIn(handlerFollowing))
 
 	
 	args := os.Args[1:]
