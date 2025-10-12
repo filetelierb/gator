@@ -15,6 +15,7 @@ import (
 	"github.com/filetelierb/gator/internal/database"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
+	//"golang.org/x/text/cases"
 )
 
 
@@ -133,11 +134,27 @@ func handlerGetUsers(s *state,cmd command) error{
 }
 
 func handlerAgg(s *state, cmd command) error{
-	feed, err := fetchFeed(context.Background(),"https://www.wagslane.dev/index.xml")
-	if err != nil{
-		return err
+
+	interval := "1m"
+	var duration int
+	if len(cmd.args) > 0{
+		interval = cmd.args[0]
 	}
-	fmt.Printf("%v",feed)
+	switch interval{
+	case "1s":
+		duration = 1
+	case "15s":
+		duration = 15
+	case "1h":
+		duration = 60 * 60
+	default:
+		duration = 60
+	}
+	ticker := time.NewTicker(time.Duration(duration) * time.Second)
+
+	for ; ; <-ticker.C {
+		scrapeFeeds(s)
+	}
 	return nil
 }
 
@@ -289,6 +306,30 @@ func handlerFollowing(s *state, cmd command, u User) error{
 
 }
 
+func handlerUnfollow(s *state,cmd command, u User) error{
+	db := s.db
+	if len(cmd.args) < 1{
+		return fmt.Errorf("url not passed")
+	}
+	url := cmd.args[0]
+	params := database.DeleteFeedFollowParams{
+		Url: sql.NullString{
+			String: url,
+			Valid: true,
+		},
+		UserID: uuid.NullUUID{
+			UUID: u.ID,
+			Valid: true,
+		},
+
+	}
+	err := db.DeleteFeedFollow(context.Background(),params)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func middlewareLoggedIn(handler func(s *state, cmd command, u User) error) func(*state, command) error {
     return func(s *state, cmd command) error {
         currentUserName := sql.NullString{
@@ -301,6 +342,28 @@ func middlewareLoggedIn(handler func(s *state, cmd command, u User) error) func(
         }
         return handler(s, cmd, currentUser)
     }
+}
+
+func scrapeFeeds(s *state) error{
+	fmt.Print("Starting a new feed scrapping\n\n")
+	nextFeed, err := s.db.GetNextFeedToFetch(context.Background())
+	if err != nil {
+		return err
+	}
+	
+	err = s.db.MarkFeedFetched(context.Background(), nextFeed.ID)
+	if err != nil {
+		return err
+	}
+	feedItems, err := fetchFeed(context.Background(), nextFeed.Url.String)
+	if err != nil {
+		return err;
+	}
+	for i, item := range feedItems.Channel.Item {
+		fmt.Printf("Item %d: %s\n", i, item.Title)
+	}
+	return nil
+
 }
 
 
@@ -334,6 +397,7 @@ func main(){
 	commands.register("feeds", handlerGetFeeds)
 	commands.register("follow", middlewareLoggedIn(handlerFollow))
 	commands.register("following",middlewareLoggedIn(handlerFollowing))
+	commands.register("unfollow",middlewareLoggedIn(handlerUnfollow))
 
 	
 	args := os.Args[1:]
