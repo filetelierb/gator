@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/filetelierb/gator/internal/config"
@@ -183,6 +184,7 @@ func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error){
 	for i,v := range rssFeed.Channel.Item {
 		v.Title = html.UnescapeString(v.Title)
 		v.Description = html.UnescapeString(v.Description)
+		
 		rssFeed.Channel.Item[i] = v
 	}
 	
@@ -359,13 +361,80 @@ func scrapeFeeds(s *state) error{
 	if err != nil {
 		return err;
 	}
-	for i, item := range feedItems.Channel.Item {
-		fmt.Printf("Item %d: %s\n", i, item.Title)
+	for _, item := range feedItems.Channel.Item {
+		nowTs := sql.NullTime{
+			Time: time.Now(),
+			Valid: true,
+		}
+		layout := "Mon, 02 Jan 2006 15:04:05 -0700"
+		publishedAt, err := time.Parse(layout, item.PubDate)
+		validPublishDate := err == nil
+		
+		postArgs := database.CreatePostParams{
+			ID: uuid.New(),
+			CreatedAt: nowTs,
+			UpdatedAt: nowTs,
+			Title: sql.NullString{
+				String: item.Title,
+				Valid: true,
+			},
+			Description: sql.NullString{
+				String: item.Description,
+				Valid: true,
+			},
+			Url: sql.NullString{
+				String: item.Link,
+				Valid: true,
+			},
+			PublishedAt: sql.NullTime{
+				Time: publishedAt,
+				Valid: validPublishDate,
+
+			},
+			FeedID: uuid.NullUUID{
+				UUID: nextFeed.ID,
+				Valid: true,
+			},
+		}
+		post, err := s.db.CreatePost(context.Background(), postArgs )
+		if err == nil {
+			fmt.Printf("Post %s pub %s\n", post.Title.String, item.PubDate)
+		}
 	}
 	return nil
 
 }
 
+func handlerBrowse (s *state, cmd command) error {
+	perPage := 2
+	args := cmd.args
+	if len(args) > 0 {
+		newPerPage, err := strconv.Atoi(args[0])
+		if err != nil {
+			return err;
+		}
+		if newPerPage <= 0 {
+			return fmt.Errorf("only positive numbers are accepted")
+		}
+		perPage = newPerPage
+	}
+	db := s.db
+	getPostsParams := database.GetPostsParams{
+		CreatedAt: sql.NullTime{
+			Time: time.Now(),
+			Valid: true,
+		},
+		Limit: int32(perPage),
+	}
+	posts, err := db.GetPosts(context.Background(),getPostsParams)
+	if err != nil {
+		return err
+	}
+	for i, post := range posts {
+		fmt.Printf("%d.- %s\n", i, post.Title.String)
+	}
+	return nil
+}
 
 
 func main(){
@@ -398,7 +467,7 @@ func main(){
 	commands.register("follow", middlewareLoggedIn(handlerFollow))
 	commands.register("following",middlewareLoggedIn(handlerFollowing))
 	commands.register("unfollow",middlewareLoggedIn(handlerUnfollow))
-
+	commands.register("browse", handlerBrowse)
 	
 	args := os.Args[1:]
 
